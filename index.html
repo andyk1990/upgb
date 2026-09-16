@@ -1,0 +1,234 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>UPGB Portal — Connecting…</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🏦</text></svg>">
+<style>
+  :root{
+    --navy:#0b2e59; --amber:#f59e0b; --ink:#0f172a; --muted:#64748b;
+    --bg:#f1f5f9; --card:#ffffff; --line:#e2e8f0;
+    --ok:#059669; --bad:#dc2626;
+  }
+  @media (prefers-color-scheme: dark){
+    :root:not([data-theme="light"]){
+      --ink:#e2e8f0; --muted:#94a3b8; --bg:#0f172a; --card:#1e293b; --line:#334155;
+    }
+  }
+  *{box-sizing:border-box}
+  body{
+    margin:0; min-height:100vh; background:var(--bg); color:var(--ink);
+    font-family:"Segoe UI",system-ui,-apple-system,sans-serif;
+    display:flex; align-items:center; justify-content:center; padding:20px;
+  }
+  .card{
+    background:var(--card); border:1px solid var(--line); border-radius:16px;
+    max-width:440px; width:100%; padding:28px 24px;
+    box-shadow:0 10px 30px rgba(0,0,0,.08);
+  }
+  .brand{display:flex; align-items:center; gap:10px; margin-bottom:4px}
+  .brand .dot{width:38px;height:38px;border-radius:10px;background:var(--navy);
+    display:grid;place-items:center;font-size:20px;flex:none}
+  h1{font-size:1.15rem; margin:0; letter-spacing:.2px}
+  .sub{color:var(--muted); font-size:.82rem; margin:2px 0 20px}
+  .row{
+    display:flex; align-items:center; gap:10px; padding:10px 12px;
+    border:1px solid var(--line); border-radius:10px; margin-bottom:8px;
+    font-size:.88rem; transition:border-color .2s;
+  }
+  .row .nm{flex:1; font-weight:600}
+  .row .st{font-size:.78rem; color:var(--muted); white-space:nowrap}
+  .row.live{border-color:var(--ok)}
+  .row.live .st{color:var(--ok); font-weight:700}
+  .row.dead{opacity:.55}
+  .row.dead .st{color:var(--bad)}
+  .spin{
+    width:14px;height:14px;border:2px solid var(--line);
+    border-top-color:var(--navy); border-radius:50%;
+    animation:sp .7s linear infinite; flex:none
+  }
+  @keyframes sp{to{transform:rotate(360deg)}}
+  .pill{width:14px;height:14px;border-radius:50%;flex:none;
+    display:grid;place-items:center;font-size:10px;color:#fff}
+  .pill.ok{background:var(--ok)} .pill.no{background:var(--bad)}
+  .pill.wait{background:var(--line)}
+  .note{font-size:.78rem;color:var(--muted);margin-top:16px;line-height:1.5}
+  .btn{
+    display:block;width:100%;padding:11px;border-radius:10px;border:none;
+    background:var(--navy);color:#fff;font-weight:700;font-size:.9rem;
+    cursor:pointer;margin-top:14px;text-align:center;text-decoration:none
+  }
+  .btn.alt{background:transparent;color:var(--navy);border:1px solid var(--navy);}
+  @media (prefers-color-scheme: dark){
+    :root:not([data-theme="light"]) .btn.alt{color:var(--amber);border-color:var(--amber)}
+  }
+  .fail{border-left:3px solid var(--bad); padding-left:12px; margin:14px 0;
+        font-size:.85rem; line-height:1.55}
+  code{background:var(--bg);padding:1px 5px;border-radius:4px;font-size:.8rem}
+</style>
+</head>
+<body>
+<div class="card">
+  <div class="brand">
+    <div class="dot">🏦</div>
+    <div>
+      <h1>UPGB Portal</h1>
+      <div class="sub" id="sub">Finding the fastest working connection…</div>
+    </div>
+  </div>
+
+  <div id="rows"></div>
+
+  <div id="done"></div>
+
+  <div class="note" id="note">
+    This page checks each connection and sends you to the first one that is
+    working. Bookmark <strong>this</strong> page — it stays the same even when
+    the connection behind it changes.
+  </div>
+</div>
+
+<script>
+/* ═══════════════════════════════════════════════════════════════════════════
+   UPGB PORTAL — CONNECTION GATEWAY
+   ---------------------------------------------------------------------------
+   WHY THIS PAGE EXISTS
+   The portal runs on a PC in the office and is reached through tunnels. Any
+   one tunnel can drop (PC sleeps, ISP renews the IP, Wi-Fi blips). If people
+   bookmark a tunnel address directly, a drop means a dead link and a phone
+   call. So everyone bookmarks THIS page instead. It is hosted away from the
+   office PC, so it stays reachable even when the PC is unreachable, and it
+   forwards each visitor to whichever tunnel is actually alive right now.
+
+   ORDER (as configured): Tailscale → zrok → ngrok.
+   To add or remove a connection later, edit the list below. Nothing else on
+   this page needs to change.
+
+   HOW THE CHECK WORKS
+   All three are probed AT THE SAME TIME, but the winner is chosen strictly by
+   the order above — so a working Tailscale always wins even if zrok answered a
+   moment sooner. Probing in parallel keeps the wait at roughly one timeout
+   (~6s worst case) rather than three stacked one after another (~18s).
+
+   WHAT COUNTS AS "WORKING"
+   The probe calls /api/health on the portal itself and requires a real JSON
+   reply. That is deliberate: a tunnel can be perfectly up while the Node
+   server behind it is stopped. Checking the app — not just the tunnel — means
+   that case correctly counts as failed and we move on to the next tunnel,
+   instead of forwarding someone to a page that will not load.
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* ►►►► EDIT THESE THREE LINES ONLY ◄◄◄◄
+   Keep the order: the first one that works is the one used. */
+var TUNNELS = [
+  { name:'Tailscale', base:'https://desktop-f5qe14v.taila99548.ts.net:8443' },
+  { name:'zrok',      base:'https://prayagrajportal.share.zrok.io' },
+  { name:'ngrok',     base:'https://obtain-tipper-skimpily.ngrok-free.dev' }
+];
+
+var TIMEOUT_MS = 6000;   // how long to wait for each tunnel before calling it dead
+var CACHE_KEY  = 'upgb_gw_base';
+
+/* Where to send the visitor once a tunnel is chosen.
+   Default is the suite home "/". A deep link can be requested with
+   ?go=/review%3Fid%3D42  — used when someone shares a specific proposal. */
+function targetPath(){
+  var q = new URLSearchParams(location.search);
+  var go = q.get('go') || '/';
+  if (go.charAt(0) !== '/') go = '/' + go;   // never allow jumping to another site
+  return go;
+}
+
+/* ── UI ──────────────────────────────────────────────────────────────────── */
+var rowsEl = document.getElementById('rows');
+var els = {};
+TUNNELS.forEach(function(t, i){
+  var d = document.createElement('div');
+  d.className = 'row';
+  d.innerHTML = '<div class="spin"></div>' +
+                '<div class="nm">' + t.name + '</div>' +
+                '<div class="st">checking…</div>';
+  rowsEl.appendChild(d);
+  els[i] = d;
+});
+function mark(i, state, text){
+  var d = els[i]; if(!d) return;
+  d.className = 'row ' + (state === 'ok' ? 'live' : state === 'no' ? 'dead' : '');
+  var icon = state === 'ok' ? '<div class="pill ok">✓</div>'
+           : state === 'no' ? '<div class="pill no">✕</div>'
+           : '<div class="spin"></div>';
+  d.innerHTML = icon + '<div class="nm">' + TUNNELS[i].name + '</div>' +
+                '<div class="st">' + text + '</div>';
+}
+
+/* ── the probe ───────────────────────────────────────────────────────────── */
+function probe(t, i){
+  var started = Date.now();
+  var ctrl = new AbortController();
+  var timer = setTimeout(function(){ ctrl.abort(); }, TIMEOUT_MS);
+
+  return fetch(t.base + '/api/health?t=' + started, {
+      signal: ctrl.signal,
+      cache: 'no-store',
+      // Two providers inject a warning page in front of free-tier shares,
+      // which would otherwise return HTML and make a healthy tunnel look dead:
+      //   ngrok  -> ngrok-skip-browser-warning
+      //   zrok   -> skip_zrok_interstitial
+      // Both are harmless to send everywhere, so the probe always sends both.
+      headers: {
+        'ngrok-skip-browser-warning': 'true',
+        'skip_zrok_interstitial': 'true'
+      }
+    })
+    .then(function(r){ if(!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
+    .then(function(j){
+      if (!j || j.ok !== true) throw new Error('unexpected reply');
+      clearTimeout(timer);
+      mark(i, 'ok', (Date.now() - started) + ' ms');
+      return true;
+    })
+    .catch(function(err){
+      clearTimeout(timer);
+      mark(i, 'no', err.name === 'AbortError' ? 'no response' : 'unreachable');
+      return false;
+    });
+}
+
+/* ── go ──────────────────────────────────────────────────────────────────── */
+function goTo(base){
+  try { sessionStorage.setItem(CACHE_KEY, base); } catch(e){}
+  location.replace(base + targetPath());
+}
+
+function allFailed(){
+  document.getElementById('sub').textContent = 'No connection is responding';
+  document.getElementById('note').style.display = 'none';
+  document.getElementById('done').innerHTML =
+    '<div class="fail"><strong>The portal is not reachable right now.</strong><br>' +
+    'This usually means the office PC is switched off, asleep, or has lost its ' +
+    'internet connection — not that anything is wrong with your device.<br><br>' +
+    'Please try again in a few minutes, or inform the RO.</div>' +
+    '<button class="btn" onclick="location.reload()">Try again</button>';
+}
+
+async function run(){
+  // Fire every probe at once; decide by priority as results land.
+  var checks = TUNNELS.map(function(t, i){ return probe(t, i); });
+  for (var i = 0; i < TUNNELS.length; i++){
+    var ok = await checks[i];
+    if (ok){
+      document.getElementById('sub').textContent = 'Connected via ' + TUNNELS[i].name + ' — opening…';
+      // let the tick render for a moment so it does not feel like a blank flash
+      setTimeout(goTo.bind(null, TUNNELS[i].base), 350);
+      // mark any still-pending lower-priority rows as "not needed"
+      for (var j = i + 1; j < TUNNELS.length; j++) mark(j, '', 'not needed');
+      return;
+    }
+  }
+  allFailed();
+}
+run();
+</script>
+</body>
+</html>
