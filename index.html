@@ -163,34 +163,44 @@ function mark(i, state, text){
 }
 
 /* ── the probe ───────────────────────────────────────────────────────────── */
-function probe(t, i){
-  var started = Date.now();
+// One attempt. withHeaders=true sends the two provider-specific headers that
+// skip the ngrok / zrok free-tier warning pages.
+//
+// Those headers are custom, so the browser sends a preflight OPTIONS request
+// before the real one, and only proceeds if the server's reply names them in
+// Access-Control-Allow-Headers. If anything in the chain does not handle that
+// preflight, the probe is blocked before it is sent and a perfectly healthy
+// tunnel looks dead. So we try WITH the headers first (needed to get past the
+// warning pages) and, if that fails, retry WITHOUT them — a plain request
+// needs no preflight at all. Only if both fail is the tunnel really down.
+function attempt(base, withHeaders){
   var ctrl = new AbortController();
   var timer = setTimeout(function(){ ctrl.abort(); }, TIMEOUT_MS);
+  var opts = { signal: ctrl.signal, cache: 'no-store' };
+  if (withHeaders) {
+    opts.headers = {
+      'ngrok-skip-browser-warning': 'true',
+      'skip_zrok_interstitial': 'true'
+    };
+  } else {
+    opts.headers = { 'Accept': 'application/json' }; // safelisted: no preflight
+  }
+  return fetch(base + '/api/health?t=' + Date.now(), opts)
+    .then(function(r){ clearTimeout(timer); if(!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
+    .then(function(j){ if (!j || j.ok !== true) throw new Error('unexpected reply'); return true; })
+    .catch(function(err){ clearTimeout(timer); throw err; });
+}
 
-  return fetch(t.base + '/api/health?t=' + started, {
-      signal: ctrl.signal,
-      cache: 'no-store',
-      // Two providers inject a warning page in front of free-tier shares,
-      // which would otherwise return HTML and make a healthy tunnel look dead:
-      //   ngrok  -> ngrok-skip-browser-warning
-      //   zrok   -> skip_zrok_interstitial
-      // Both are harmless to send everywhere, so the probe always sends both.
-      headers: {
-        'ngrok-skip-browser-warning': 'true',
-        'skip_zrok_interstitial': 'true'
-      }
-    })
-    .then(function(r){ if(!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
-    .then(function(j){
-      if (!j || j.ok !== true) throw new Error('unexpected reply');
-      clearTimeout(timer);
+function probe(t, i){
+  var started = Date.now();
+  return attempt(t.base, true)
+    .catch(function(){ return attempt(t.base, false); })
+    .then(function(){
       mark(i, 'ok', (Date.now() - started) + ' ms');
       return true;
     })
     .catch(function(err){
-      clearTimeout(timer);
-      mark(i, 'no', err.name === 'AbortError' ? 'no response' : 'unreachable');
+      mark(i, 'no', err && err.name === 'AbortError' ? 'no response' : 'unreachable');
       return false;
     });
 }
